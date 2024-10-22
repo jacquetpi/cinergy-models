@@ -1,5 +1,5 @@
 import sys, getopt, re, time
-from os import listdir, kill, killpg, getpgid
+from os import listdir, kill, killpg, getpgid, setsid, remove
 from os.path import isfile, join, exists
 import subprocess, signal
 
@@ -7,7 +7,7 @@ OUTPUT_PREFIX   = 'consumption'
 OUTPUT_HEADER = 'timestamp,domain,measure'
 OUTPUT_NL     = '\n'
 ROOT_FS       ='/sys/class/powercap/'
-PRECISION     = 5
+PRECISION     = 2
 SYSFS_STAT    = '/proc/stat'
 SYSFS_TOPO    = '/sys/devices/system/cpu/'
 SYSFS_FREQ    = '/sys/devices/system/cpu/{core}/cpufreq/scaling_cur_freq'
@@ -15,11 +15,12 @@ SYSFS_FREQ    = '/sys/devices/system/cpu/{core}/cpufreq/scaling_cur_freq'
 SYSFS_STATS_KEYS  = {'cpuid':0, 'user':1, 'nice':2 , 'system':3, 'idle':4, 'iowait':5, 'irq':6, 'softirq':7, 'steal':8, 'guest':9, 'guest_nice':10}
 SYSFS_STATS_IDLE  = ['idle', 'iowait']
 SYSFS_STATS_NTID  = ['user', 'nice', 'system', 'irq', 'softirq', 'steal']
-MODEL_MEASURE_WINDOW = 2
-MODEL_ITERATION = 10
 LIVE_DISPLAY = False
 PER_CACHE_USAGE = None
 VM_CONNECTOR    = None
+MODEL_MEASURE_WINDOW = 2
+MODEL_ITERATION = 2
+MODEL_STEP = 25 # Percentage of load per step
 
 def print_usage():
     print('python3 rapl-reader.py [--help] [--live]  [--explicit] [--vm=qemu:///system] [--output=' + OUTPUT_PREFIX + '] [--precision=' + str(PRECISION) + ' (number of decimal)]')
@@ -240,10 +241,8 @@ def find_process(keyword : str = 'qemu'):
         if result.stdout:
             return int(result.stdout.strip().split()[0])  # Return the first QEMU PID found
         else:
-            print("No QEMU process found.")
             return None
     except subprocess.SubprocessError as e:
-        print(f"Error finding QEMU process: {e}")
         return None
 
 def get_child_process(pid):
@@ -255,8 +254,17 @@ def get_child_process(pid):
             children.remove(pid)
             return children
     except FileNotFoundError:
-        print(f"Process {pid} not found.")
+       pass
     return []
+
+def does_file_exist(file : str, to_be_removed : bool = False):
+    try:
+        with open(file, 'r') as f:
+            pass
+        if to_be_removed: remove(file)
+        return True
+    except FileNotFoundError:
+        return False
 
 def get_pid_name(pid):
     try:
@@ -303,17 +311,22 @@ def get_process_usage(pid : int, curr_time : int): # curr_time in ns
         if str(pid) in process_hist_dict:
             prev_timestamp, prev_time = process_hist_dict[str(pid)]
             elapsed_time = (curr_timestamp - prev_timestamp)
-            usage = round(((curr_time - prev_time) / elapsed_time)*100,1)
+            usage = round(((curr_time - prev_time) / elapsed_time)*100,PRECISION)
         process_hist_dict[str(pid)] = (curr_timestamp, curr_time)
     return usage
 
-def monitor_process(process_as_dict : dict):
+def monitor_process(process_as_dict : dict, replace_pid_per_label : dict = None, output_dict : dict = None):
     for process, child_list in process_as_dict.items():
         # Overall process is monitored using stat
-        print('global', get_process_usage(process, read_process_stat(process)))
+        process_usage = get_process_usage(process, read_process_stat(process))
+        if LIVE_DISPLAY: print('vm', process_usage)
+        if output_dict is not None and process_usage is not None: output_dict['vm'] = process_usage
         # Details of repartition is obtained using schedstat
         for child in child_list:
-            print(child, get_pid_name(child), get_process_usage(child, read_process_schedstat(child)))
+            child_usage = get_process_usage(child, read_process_schedstat(child))
+            if LIVE_DISPLAY: print(child if (replace_pid_per_label is None or str(child) not in replace_pid_per_label) else replace_pid_per_label[str(child)], child_usage)
+            if output_dict is not None and child_usage is not None: output_dict[child if (replace_pid_per_label is None or str(child) not in replace_pid_per_label) else replace_pid_per_label[str(child)]] = child_usage
+        break # We only do the first VM for now
 
 ###########################################
 # Read libvirt
@@ -384,13 +397,14 @@ def read_joule_file(domain : str, file : str, hist : dict, current_time : int):
 ###########################################
 
 rapl_hist, cpu_hist, output_file, launch_at, last_call = {}, {}, '', 0, 0
-def read_system(label : str, rapl_sysfs : dict, cpuid_per_numa : dict, cache_topo : dict, misc : dict = {}, repetition : int = 1, sleep : int = 0, init : bool = False):
+def read_system(label : str, rapl_sysfs : dict, cpuid_per_numa : dict, cache_topo : dict, misc : dict = {}, repetition : int = 1, sleep : int = 0, init : bool = False, monitor_process_params : dict = None):
     global rapl_hist, cpu_hist, output_file, launch_at, last_call
     if init:
         rapl_hist = {name:None for name in rapl_sysfs.keys()}
         rapl_hist['time'] = None # for joule to watt conversion
         cpu_hist = {}
         launch_at = time.time_ns()
+        last_call = 0
         output_file = OUTPUT_PREFIX + '-' + label + '.csv'
         with open(output_file, 'w') as f: f.write(OUTPUT_HEADER + OUTPUT_NL)
 
@@ -408,6 +422,7 @@ def read_system(label : str, rapl_sysfs : dict, cpuid_per_numa : dict, cache_top
         libvirt_measures = dict()
         if VM_CONNECTOR != None: libvirt_measures = read_libvirt()
 
+        if monitor_process_params is not None: monitor_process(**monitor_process_params)
         output(output_file=output_file, rapl_measures=rapl_measures, cpu_measures=cpu_measures, libvirt_measures=libvirt_measures, misc=misc, time_since_launch=int((last_call-launch_at)/(10**9)))
 
 def output(output_file : str, rapl_measures : dict, cpu_measures : dict, libvirt_measures : dict, misc : dict, time_since_launch : int):
@@ -439,47 +454,84 @@ def output(output_file : str, rapl_measures : dict, cpu_measures : dict, libvirt
 ###########################################
 # Main functions
 ###########################################
-def gen_model(rapl_sysfs : dict, cpuid_per_numa : dict, cache_topo : dict):
-    step  = 25
+
+def core_number(cpuid_per_numa : dict):
     size = 0
     for cpuid in cpuid_per_numa.values(): size+=len(cpuid)
+    return size
+
+def noise(rapl_sysfs : dict, cpuid_per_numa : dict, cache_topo : dict, label : str, monitor_process_params : dict = None):
     target_level = 0
+    size = core_number(cpuid_per_numa)
+
     # Capture idle
     if LIVE_DISPLAY: print('gen_model target', target_level, '%')
-    read_system(label='training', rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, misc={'phase':'training','target':0}, repetition=MODEL_ITERATION, sleep=MODEL_MEASURE_WINDOW, init=True)
+
+    misc = {'phase':label,'target':target_level} 
+    if monitor_process_params is not None: monitor_process_params['output_dict'] = misc
+    read_system(label=label, rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, misc=misc, repetition=MODEL_ITERATION, sleep=MODEL_MEASURE_WINDOW, init=True, monitor_process_params=monitor_process_params)
+    
     # Capture workload
     for numa in cpuid_per_numa.keys():
         for cpuid in cpuid_per_numa[numa]:
-            for _ in range(int(100/step)):
+            for _ in range(int(100/MODEL_STEP)):
                 target_level+=1
-                target_level_percentage = int(round((target_level/(size/(step/100))),2)*100)
-                if LIVE_DISPLAY: print('gen_model target', target_level_percentage, '%')
-                process_to_kill.append(subprocess.Popen("stress-ng -c 1 -l " + str(step), shell=True))
-                read_system(label='training', rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, misc={'phase':'training','target':target_level_percentage}, repetition=MODEL_ITERATION, sleep=MODEL_MEASURE_WINDOW, init=False)
+                target_level_percentage = int(round((target_level/(size/(MODEL_STEP/100))),2)*100)
+                if LIVE_DISPLAY: print(label, 'target', target_level_percentage, '%')
+                process_to_kill.append(subprocess.Popen("stress-ng -c 1 -l " + str(MODEL_STEP), shell=True, preexec_fn=setsid))
 
+                misc={'phase':label,'target':target_level_percentage}
+                if monitor_process_params is not None: monitor_process_params['output_dict'] = misc
+                read_system(label=label, rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, misc=misc, repetition=MODEL_ITERATION, sleep=MODEL_MEASURE_WINDOW, init=False, monitor_process_params=monitor_process_params)
     for process in process_to_kill: killpg(getpgid(process.pid), signal.SIGTERM)
 
-def gen_exp(rapl_sysfs : dict, cpuid_per_numa : dict, cache_topo : dict, label : str, with_noise : bool = False):
-    # Launch VM
-    process_to_kill.append(subprocess.Popen("./launch-vm.sh", shell=True))
+def launch_vm(label : str, host_core : int):
+    estimated_duration = int(host_core * (100/MODEL_STEP) * MODEL_MEASURE_WINDOW * MODEL_ITERATION)
+    subprocess.Popen("bash/launchvm.sh " + str(host_core) + " " + str(estimated_duration), shell=True,  preexec_fn=setsid)
+    process_label = {}
     MAX_TRY = 10
     for i in range(MAX_TRY):
         pid = find_process(keyword='qemu')
         if pid is not None:
-            process_as_dict = {pid:get_child_process(pid)}
-            break
-        print('Unable to find VM, re-trying in 5s [', i, '/', MAX_TRY, ']')
-        time.sleep(5)
-    if pid is None:
-        print('Failed to launch VM, exiting')
-        sys.exit(-1)
+            all_child_process = get_child_process(pid)
+            vcpu_process = list()
+            for child_process in all_child_process:
+                name = get_pid_name(child_process)
+                if 'CPU' in name :
+                    process_label[str(child_process)] = name.replace('/KVM', '')
+                    vcpu_process.append(child_process)
+
+            print('VM found, waiting for it to be ready to serve')
+            while not does_file_exist(file='/tmp/vmready-sync', to_be_removed=True):
+                time.sleep(1)
+            print('VM is ready to serve')
+            return {pid: vcpu_process}, process_label
+
+        print('Unable to find VM, re-trying in 15s [', i+1, '/', MAX_TRY, ']')
+        time.sleep(15)
+    print('Failed to launch VM on step', label,  'exiting')
+    sys.exit(-1)
+
+def gen_model(rapl_sysfs : dict, cpuid_per_numa : dict, cache_topo : dict, label : str):
+    print("Launching", label)
+    noise(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label=label)
+
+def gen_exp(rapl_sysfs : dict, cpuid_per_numa : dict, cache_topo : dict, label : str, with_noise : bool = False):
+    print("Launching", label)
+    # Launch VM
+    process_as_dict, process_label = launch_vm(label=label, host_core=core_number(cpuid_per_numa))
     # Capture
-    first_call = True
-    while find_process(keyword='qemu') is not None:
-        misc = {'phase':'training','target':0} # TODO: link with monitor_process
-        read_system(label=label, rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, misc=misc, repetition=MODEL_ITERATION, sleep=MODEL_MEASURE_WINDOW, init=first_call)
-        first_call=False
-    for process in process_to_kill: killpg(getpgid(process.pid), signal.SIGTERM)
+    if with_noise:
+        monitor_process_params = {'process_as_dict':process_as_dict, 'replace_pid_per_label': process_label, 'output_dict': {}}
+        noise(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label=label,monitor_process_params=monitor_process_params)
+        return
+    else:
+        first_call = True
+        while find_process(keyword='qemu') is not None:
+            misc = {'phase':label}
+            monitor_process_params = {'process_as_dict':process_as_dict, 'replace_pid_per_label': process_label, 'output_dict': misc}
+            read_system(label=label, rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, misc=misc, repetition=MODEL_ITERATION, sleep=MODEL_MEASURE_WINDOW, init=first_call, monitor_process_params=monitor_process_params)
+            first_call=False
 
 ###########################################
 # Entrypoint, manage arguments
@@ -524,7 +576,9 @@ if __name__ == '__main__':
         for numa_id, cpu_list in cpuid_per_numa.items(): print('socket-' + str(numa_id) + ':', len(cpu_list), 'cores')
         print('')
 
-        gen_model(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo)
+        estimated_duration = int(core_number(cpuid_per_numa) * (100/MODEL_STEP) * MODEL_MEASURE_WINDOW * MODEL_ITERATION)
+        print('Launching experiment', OUTPUT_PREFIX, 'with parameters:', MODEL_STEP, '%(load per step)', 'on', core_number(cpuid_per_numa), 'cores with', MODEL_ITERATION, 'measures of', MODEL_MEASURE_WINDOW, 's, expected duration:', estimated_duration*3, 's')
+        gen_model(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='training')
         gen_exp(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='groundtruth', with_noise=False)
         gen_exp(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='cloudlike', with_noise=True)
 

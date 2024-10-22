@@ -2,6 +2,10 @@
 
 Measure and calibrate an energy model
 
+```bash
+apt install stress-ng
+```
+
 ## Features
 
 Generate energy models
