@@ -19,11 +19,11 @@ LIVE_DISPLAY = False
 PER_CACHE_USAGE = None
 VM_CONNECTOR    = None
 MODEL_MEASURE_WINDOW = 2
-MODEL_ITERATION = 2
+MODEL_ITERATION = 10
 MODEL_STEP = 25 # Percentage of load per step
 
 def print_usage():
-    print('python3 rapl-reader.py [--help] [--live]  [--explicit] [--vm=qemu:///system] [--output=' + OUTPUT_PREFIX + '] [--precision=' + str(PRECISION) + ' (number of decimal)]')
+    print('python3 rapl-reader.py [--help] [--live] [--explicit] [--vm=qemu:///system] [--output=' + OUTPUT_PREFIX + '] [--precision=' + str(PRECISION) + ' (number of decimal)]')
 
 ###########################################
 # Find relevant sysfs

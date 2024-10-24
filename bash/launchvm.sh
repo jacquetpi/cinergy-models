@@ -23,7 +23,7 @@ virsh --connect=qemu:///system undefine "$vmname"
 
 # Setup : install data
 #rsync -avhW --no-compress --progress --info=progress2 "$image" "$pathbase"/"$vmname".qcow2
-virt-install --connect qemu:///system --import --name "$vmname" --vcpu "$vmcpu" --memory "$vmmem" --disk ${pathbase}/"$vmname".qcow2,format=qcow2,bus=virtio --import --os-variant ubuntu20.04 --network default --virt-type kvm --noautoconsole --check path_in_use=off
+virt-install --connect qemu:///system --import --name "$vmname" --vcpu "$vmcpu" --memory "$vmmem" --disk ${pathbase}/"$vmname".qcow2,format=qcow2,bus=virtio --import --os-variant ubuntu20.04 --network network=default --virt-type kvm --noautoconsole --check path_in_use=off
 
 # Post action : wait to retrieve vm ip
 while sleep 10;
