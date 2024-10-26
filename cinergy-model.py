@@ -76,7 +76,7 @@ def find_cache_topo():
                 cache_id = int(f.read())
             cache_list_for_cpu[cache_index] = cache_id
             prev_shared = shared
-            
+
         cache_index_of_interest = list(cache_list_for_cpu.keys())
         cache_index_of_interest.sort(reverse=True)
         prev_elem = cpu_per_cache
@@ -168,7 +168,7 @@ def __get_usage_of_line(split : list, hist_object : object, update_history : boo
         delta_total    = (idle + not_idle) - (prev_idle + prev_not_idle)
         if delta_total>0: # Manage overflow
             cpu_usage = ((delta_total-delta_idle)/delta_total)*100
-    
+
     if update_history: hist_object.set_time(idle=idle, not_idle=not_idle)
     return cpu_usage
 
@@ -197,11 +197,11 @@ def associate_usage_to_cache_levels(core_usage : dict, cache_topo, label = None,
     if isinstance(cache_topo, dict):
         cpu_list = list()
         for cache_id in cache_topo.keys():
-            
+
             child_label = ""
             if label is not None: child_label = label + '_'
             child_label += cache_id
-            
+
             cpu_list.extend(associate_usage_to_cache_levels(core_usage=core_usage, cache_topo=cache_topo[cache_id], label=child_label, padding_length=padding_length+2))
 
         if label is not None:
@@ -460,17 +460,30 @@ def core_number(cpuid_per_numa : dict):
     for cpuid in cpuid_per_numa.values(): size+=len(cpuid)
     return size
 
+def gen_process_model(rapl_sysfs : dict, cpuid_per_numa : dict, cache_topo : dict, label : str):
+    if LIVE_DISPLAY: print('gen_model target 0%')
+    misc = {'phase':label,'target':0}
+    read_system(label=label, rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, misc=misc, repetition=MODEL_ITERATION*2, sleep=MODEL_MEASURE_WINDOW, init=True)
+
+    for process_level in range(1,100+1):
+        if LIVE_DISPLAY: print(label, 'target', process_level, '%')
+        process_to_kill.append(subprocess.Popen("stress-ng -c 1 -l " + str(process_level), shell=True, preexec_fn=setsid))
+        misc={'phase':label,'target':process_level}
+        read_system(label=label, rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, misc=misc, repetition=MODEL_ITERATION*2, sleep=MODEL_MEASURE_WINDOW, init=False)
+        for process in process_to_kill: killpg(getpgid(process.pid), signal.SIGTERM)
+
+
 def noise(rapl_sysfs : dict, cpuid_per_numa : dict, cache_topo : dict, label : str, monitor_process_params : dict = None):
     target_level = 0
     size = core_number(cpuid_per_numa)
 
     # Capture idle
-    if LIVE_DISPLAY: print('gen_model target', target_level, '%')
+    if LIVE_DISPLAY: print('gen_model target 0%')
 
-    misc = {'phase':label,'target':target_level} 
+    misc = {'phase':label,'target':0}
     if monitor_process_params is not None: monitor_process_params['output_dict'] = misc
     read_system(label=label, rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, misc=misc, repetition=MODEL_ITERATION, sleep=MODEL_MEASURE_WINDOW, init=True, monitor_process_params=monitor_process_params)
-    
+
     # Capture workload
     for numa in cpuid_per_numa.keys():
         for cpuid in cpuid_per_numa[numa]:
@@ -555,7 +568,7 @@ if __name__ == '__main__':
         elif current_argument in('-c', '--cache'):
             PER_CACHE_USAGE = True
         elif current_argument in('-v', '--vm'):
-            import libvirt 
+            import libvirt
             VM_CONNECTOR = libvirt.open(current_value)
             if not VM_CONNECTOR: raise SystemExit('Failed to open connection to ' + current_value)
         elif current_argument in('-o', '--output'):
@@ -576,11 +589,13 @@ if __name__ == '__main__':
         for numa_id, cpu_list in cpuid_per_numa.items(): print('socket-' + str(numa_id) + ':', len(cpu_list), 'cores')
         print('')
 
-        estimated_duration = int(core_number(cpuid_per_numa) * (100/MODEL_STEP) * MODEL_MEASURE_WINDOW * MODEL_ITERATION)
+        estimated_duration = int(core_number(cpuid_per_numa) * (100/MODEL_STEP) * MODEL_MEASURE_WINDOW * MODEL_ITERATION) + 100*( 2 * MODEL_MEASURE_WINDOW * MODEL_ITERATION)
         print('Launching experiment', OUTPUT_PREFIX, 'with parameters:', MODEL_STEP, '%(load per step)', 'on', core_number(cpuid_per_numa), 'cores with', MODEL_ITERATION, 'measures of', MODEL_MEASURE_WINDOW, 's, expected duration:', estimated_duration*3, 's')
-        gen_model(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='training')
-        gen_exp(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='groundtruth', with_noise=False)
-        gen_exp(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='cloudlike', with_noise=True)
+        
+        gen_process_model(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='training-process')
+        #gen_model(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='training-server')
+        #gen_exp(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='groundtruth', with_noise=False)
+        #gen_exp(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='cloudlike', with_noise=True)
 
     except KeyboardInterrupt:
         for process in process_to_kill: killpg(getpgid(process.pid), signal.SIGTERM)
