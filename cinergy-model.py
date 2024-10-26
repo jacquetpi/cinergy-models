@@ -593,9 +593,9 @@ if __name__ == '__main__':
         print('Launching experiment', OUTPUT_PREFIX, 'with parameters:', MODEL_STEP, '%(load per step)', 'on', core_number(cpuid_per_numa), 'cores with', MODEL_ITERATION, 'measures of', MODEL_MEASURE_WINDOW, 's, expected duration:', estimated_duration*3, 's')
         
         gen_process_model(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='training-process')
-        #gen_model(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='training-server')
-        #gen_exp(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='groundtruth', with_noise=False)
-        #gen_exp(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='cloudlike', with_noise=True)
+        gen_model(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='training-server')
+        gen_exp(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='groundtruth', with_noise=False)
+        gen_exp(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='cloudlike', with_noise=True)
 
     except KeyboardInterrupt:
         for process in process_to_kill: killpg(getpgid(process.pid), signal.SIGTERM)
