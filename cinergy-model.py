@@ -579,13 +579,11 @@ if __name__ == '__main__':
         estimated_duration = 0
         for load_percentage in MODEL_STEP:
             estimated_duration += int(core_number(cpuid_per_numa) * (100/load_percentage) * MODEL_MEASURE_WINDOW * MODEL_ITERATION)
-            break
         estimated_duration += int((core_number(cpuid_per_numa) * (100/MODEL_STEP[0]) * MODEL_MEASURE_WINDOW * MODEL_ITERATION)*2)
 
         print('Launching experiment', OUTPUT_PREFIX, 'with parameters:', MODEL_STEP, '%(load per step)', 'on', core_number(cpuid_per_numa), 'cores with', MODEL_ITERATION, 'measures of', MODEL_MEASURE_WINDOW, 's, expected duration:', estimated_duration, 's')
         for load_percentage in MODEL_STEP:
             gen_model(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, load_percentage=load_percentage, label='training-' + str(load_percentage))
-            break
 
         gen_exp(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='groundtruth', with_noise=False)
         gen_exp(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='cloudlike', with_noise=True)
