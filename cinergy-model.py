@@ -20,7 +20,7 @@ PER_CACHE_USAGE = None
 VM_CONNECTOR    = None
 MODEL_MEASURE_WINDOW = 2
 MODEL_ITERATION = 10
-MODEL_STEP = 25 # Percentage of load per step
+MODEL_STEP = [25, 50, 100] # Percentage of load per step
 
 def print_usage():
     print('python3 rapl-reader.py [--help] [--live] [--explicit] [--vm=qemu:///system] [--output=' + OUTPUT_PREFIX + '] [--precision=' + str(PRECISION) + ' (number of decimal)]')
@@ -460,20 +460,7 @@ def core_number(cpuid_per_numa : dict):
     for cpuid in cpuid_per_numa.values(): size+=len(cpuid)
     return size
 
-def gen_process_model(rapl_sysfs : dict, cpuid_per_numa : dict, cache_topo : dict, label : str):
-    if LIVE_DISPLAY: print('gen_model target 0%')
-    misc = {'phase':label,'target':0}
-    read_system(label=label, rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, misc=misc, repetition=MODEL_ITERATION*2, sleep=MODEL_MEASURE_WINDOW, init=True)
-
-    for process_level in range(1,100+1):
-        if LIVE_DISPLAY: print(label, 'target', process_level, '%')
-        process_to_kill.append(subprocess.Popen("stress-ng -c 1 -l " + str(process_level), shell=True, preexec_fn=setsid))
-        misc={'phase':label,'target':process_level}
-        read_system(label=label, rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, misc=misc, repetition=MODEL_ITERATION*2, sleep=MODEL_MEASURE_WINDOW, init=False)
-        for process in process_to_kill: killpg(getpgid(process.pid), signal.SIGTERM)
-
-
-def noise(rapl_sysfs : dict, cpuid_per_numa : dict, cache_topo : dict, label : str, monitor_process_params : dict = None):
+def noise(rapl_sysfs : dict, cpuid_per_numa : dict, cache_topo : dict, label : str, load_percentage : int, monitor_process_params : dict = None):
     target_level = 0
     size = core_number(cpuid_per_numa)
 
@@ -487,19 +474,19 @@ def noise(rapl_sysfs : dict, cpuid_per_numa : dict, cache_topo : dict, label : s
     # Capture workload
     for numa in cpuid_per_numa.keys():
         for cpuid in cpuid_per_numa[numa]:
-            for _ in range(int(100/MODEL_STEP)):
+            for _ in range(int(100/load_percentage)):
                 target_level+=1
-                target_level_percentage = int(round((target_level/(size/(MODEL_STEP/100))),2)*100)
+                target_level_percentage = int(round((target_level/(size/(load_percentage/100))),2)*100)
                 if LIVE_DISPLAY: print(label, 'target', target_level_percentage, '%')
-                process_to_kill.append(subprocess.Popen("stress-ng -c 1 -l " + str(MODEL_STEP), shell=True, preexec_fn=setsid))
+                process_to_kill.append(subprocess.Popen("stress-ng -c 1 -l " + str(load_percentage), shell=True, preexec_fn=setsid))
 
                 misc={'phase':label,'target':target_level_percentage}
                 if monitor_process_params is not None: monitor_process_params['output_dict'] = misc
                 read_system(label=label, rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, misc=misc, repetition=MODEL_ITERATION, sleep=MODEL_MEASURE_WINDOW, init=False, monitor_process_params=monitor_process_params)
     for process in process_to_kill: killpg(getpgid(process.pid), signal.SIGTERM)
 
-def launch_vm(label : str, host_core : int):
-    estimated_duration = int(host_core * (100/MODEL_STEP) * MODEL_MEASURE_WINDOW * MODEL_ITERATION)
+def launch_vm(label : str, host_core : int, load_percentage : int):
+    estimated_duration = int(host_core * (100/load_percentage) * MODEL_MEASURE_WINDOW * MODEL_ITERATION)
     subprocess.Popen("bash/launchvm.sh " + str(host_core) + " " + str(estimated_duration), shell=True,  preexec_fn=setsid)
     process_label = {}
     MAX_TRY = 10
@@ -525,18 +512,18 @@ def launch_vm(label : str, host_core : int):
     print('Failed to launch VM on step', label,  'exiting')
     sys.exit(-1)
 
-def gen_model(rapl_sysfs : dict, cpuid_per_numa : dict, cache_topo : dict, label : str):
+def gen_model(rapl_sysfs : dict, cpuid_per_numa : dict, cache_topo : dict, load_percentage : int, label : str):
     print("Launching", label)
-    noise(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label=label)
+    noise(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, load_percentage=load_percentage, label=label)
 
 def gen_exp(rapl_sysfs : dict, cpuid_per_numa : dict, cache_topo : dict, label : str, with_noise : bool = False):
     print("Launching", label)
     # Launch VM
-    process_as_dict, process_label = launch_vm(label=label, host_core=core_number(cpuid_per_numa))
+    process_as_dict, process_label = launch_vm(label=label, host_core=core_number(cpuid_per_numa), load_percentage=MODEL_STEP[0])
     # Capture
     if with_noise:
         monitor_process_params = {'process_as_dict':process_as_dict, 'replace_pid_per_label': process_label, 'output_dict': {}}
-        noise(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label=label,monitor_process_params=monitor_process_params)
+        noise(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, load_percentage=MODEL_STEP[0], label=label,monitor_process_params=monitor_process_params)
         return
     else:
         first_call = True
@@ -588,12 +575,18 @@ if __name__ == '__main__':
         print('>NUMA topology found:')
         for numa_id, cpu_list in cpuid_per_numa.items(): print('socket-' + str(numa_id) + ':', len(cpu_list), 'cores')
         print('')
-
-        estimated_duration = int(core_number(cpuid_per_numa) * (100/MODEL_STEP) * MODEL_MEASURE_WINDOW * MODEL_ITERATION) + 100*( 2 * MODEL_MEASURE_WINDOW * MODEL_ITERATION)
-        print('Launching experiment', OUTPUT_PREFIX, 'with parameters:', MODEL_STEP, '%(load per step)', 'on', core_number(cpuid_per_numa), 'cores with', MODEL_ITERATION, 'measures of', MODEL_MEASURE_WINDOW, 's, expected duration:', estimated_duration*3, 's')
         
-        gen_process_model(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='training-process')
-        gen_model(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='training-server')
+        estimated_duration = 0
+        for load_percentage in MODEL_STEP:
+            estimated_duration += int(core_number(cpuid_per_numa) * (100/load_percentage) * MODEL_MEASURE_WINDOW * MODEL_ITERATION)
+            break
+        estimated_duration += int((core_number(cpuid_per_numa) * (100/MODEL_STEP[0]) * MODEL_MEASURE_WINDOW * MODEL_ITERATION)*2)
+
+        print('Launching experiment', OUTPUT_PREFIX, 'with parameters:', MODEL_STEP, '%(load per step)', 'on', core_number(cpuid_per_numa), 'cores with', MODEL_ITERATION, 'measures of', MODEL_MEASURE_WINDOW, 's, expected duration:', estimated_duration, 's')
+        for load_percentage in MODEL_STEP:
+            gen_model(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, load_percentage=load_percentage, label='training-' + str(load_percentage))
+            break
+
         gen_exp(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='groundtruth', with_noise=False)
         gen_exp(rapl_sysfs=rapl_sysfs, cpuid_per_numa=cpuid_per_numa, cache_topo=cache_topo, label='cloudlike', with_noise=True)
 
