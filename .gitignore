@@ -5,6 +5,7 @@ models/
 model/
 measures/
 measures-stress/
+notebooks/figures/
 
 ### Python ###
 # Byte-compiled / optimized / DLL files
