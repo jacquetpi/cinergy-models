@@ -3,9 +3,11 @@
 *.csv
 models/
 model/
+data/
 measures/
 measures-stress/
 notebooks/figures/
+notebooks/investig.ipynb
 
 ### Python ###
 # Byte-compiled / optimized / DLL files

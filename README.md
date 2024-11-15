@@ -26,7 +26,11 @@ The VM setup can be initiated by running the script in ```bash/launchvm.sh```.
 This script should be adapted to configure your VM and generate a workload inside it. 
 Our example uses QEMU/KVM with the Libvirt API, with an internal workload based on the Social Network benchmark from DeathStarBench.
 
+
 ## Data generation
+
+The data needed for our models can be generated with a Python tool.
+If you prefer to use the data from our experiments, skip this section.
 
 To activate the virtual environment and view the available options:
 ```bash
@@ -49,6 +53,11 @@ Multiple CSV files will be generated:
 - ```*groundtruth.csv``` from Scenario B
 - ```*cloudlike.csv``` from Scenario C
 
-## Model generation
+## Models generation
 
-Models can be generated using the jupyter notebook in ```notebooks/models.ipynb```.
+If you want to load the data from our experiments:
+```bash
+tar -xvf compressed-data/data.tar.gz
+```
+
+Models can be generated from the data using the jupyter notebook in ```notebooks/paper-figures.ipynb```.
